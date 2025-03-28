@@ -20,7 +20,7 @@ def consultar_plantas():
         cursor = conn.cursor(dictionary=True)
 
         # Consultar todas as plantas
-        cursor.execute("SELECT * FROM plantas")
+        cursor.execute("SELECT * FROM planta")
         resultados = cursor.fetchall()
 
         # Fechar conexão

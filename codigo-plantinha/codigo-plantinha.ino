@@ -1,24 +1,7 @@
-
-//-------Informações sobre a planta--------
-
-#define BLYNK_PRINT Serial
-#define BLYNK_TEMPLATE_ID "TMPL2HU4otiaB"
-#define BLYNK_TEMPLATE_NAME "Tcc Plantinha"
-#define BLYNK_AUTH_TOKEN "6eu6YBZ-GDQFj-N5gC6QZd_5fs3mxmm0"
-
-//-------Configurações iniciais da plataforma Blynk--------
-
-// Insira abaixo o nome da sua rede WiFi
-const char* ssid = "Desktop_F4361394";
-
-// Insira abaixo a senha da sua rede WiFi
-const char* password = "7532112703667503";
-
-// Endereço do Flask
-const char* serverAddress = "http://192.168.1.102:5000/plantas";
+//--------Arquivo de configuração
+#include "config.h"
 
 //--------Bibliotecas utilizadas no código--------
-
 #include <Adafruit_BMP280.h>
 #include <Adafruit_Sensor.h>
 #include <BH1750.h>
@@ -32,14 +15,11 @@ const char* serverAddress = "http://192.168.1.102:5000/plantas";
 // Resultado do servidor
 JsonArray plantas;
 
-
 //--------Configurações iniciais do sensor de umidade do solo--------
-
 int pinUmidadeSolo;
 float umidade;
 
 //--------Configurações iniciais do sensor de temperatura--------
-
 #define BMP280_I2C_ADDRESS 0x76  //Define o endereço I2C do BMP280. Esse endereço (0x76) é o que o ESP8266 usará para "falar" com o sensor.
 Adafruit_BMP280 bmp280;
 
@@ -53,8 +33,11 @@ LiquidCrystal_I2C lcd(0x27, 20, 4);
 //-------- Variaveis para controle de tempo------------------------
 float umidadeMin = 30.0;                   // Umidade mínima ideal do solo (%)
 float umidadeMax = 60.0;                   // Umidade máxima ideal do solo (%)
-int tempoLuminosidade = 10 * 3600 * 1000;  // Exemplo: 10 horas em milissegundos
+int horasNecessarias = 1;
+int tempoLuminosidade = horasNecessarias * 3600 * 1000;  // Exemplo: 1 horas em milissegundos
 unsigned long ultimaLigacaoLampada = 0;
+bool lampadaLigada = false; 
+bool bombaLigada = false;
 
 //------------ Definição de pinos bomba e lampada
 #define BOMBA D5
@@ -78,8 +61,9 @@ void setup() {
   }
 
   // Inicializa LCD
-  Wire.begin(4, 5);  // SDA = D2 (GPIO4), SCL = D1 (GPIO5)
-  lcd.begin(20, 4);  // Inicializa o LCD
+  Wire.begin(D2, D1);  // NodeMCU: SDA, SCL
+  lcd.begin(20, 4);    // Inicializa o LCD
+  lcd.backlight();     // Liga o backlight
   lcd.setCursor(0, 0);
   lcd.print("Iniciando!");
 
@@ -87,8 +71,8 @@ void setup() {
   lightMeter.begin();
 
   //Configura o D5 para controle da bomba
-  pinMode(BOMBA, OUTPUT);
-  digitalWrite(BOMBA, HIGH); // Garante que a bomba comece desligada
+  //pinMode(BOMBA, OUTPUT);
+  //digitalWrite(BOMBA, HIGH); // Garante que a bomba comece desligada
 
   // Conectar ao WiFi
   conectarWiFi();
@@ -101,24 +85,18 @@ void setup() {
 
 void loop() {
 
-  // Verifica a luminosidade ambiente
-  uint16_t luminosidade = lightMeter.readLightLevel();
-
-  // Verifica a temperatura ambiente
-  float temperatura = bmp280.readTemperature();
-
   // Verifica a umidade do solo
-  monitorarUmidadeSolo();
+  //monitorarUmidadeSolo();
 
   // Verifica o tempo de luminosidade que a planta precisa
-  monitorarLampada();
+  //monitorarLampada();
 
   // Atualização da plataforma Blynk
   Blynk.run();
 
   // Envia os dados para a plataforma Blynk
-  Blynk.virtualWrite(V0, luminosidade);
-  Blynk.virtualWrite(V1, temperatura);
+  Blynk.virtualWrite(V0, lightMeter.readLightLevel());
+  Blynk.virtualWrite(V1, bmp280.readTemperature());
   Blynk.virtualWrite(V2, umidade);
 }
 //--------- Funções
@@ -135,52 +113,6 @@ void conectarWiFi() {
   Serial.println("\nConectado ao WiFi");
 }
 
-void printarPlantas(JsonArray plantas) {
-  for (JsonObject planta : plantas) {
-    Serial.print("ID: ");
-    Serial.println(planta["id"].as<int>());
-    Serial.print("Nome: ");
-    Serial.println(planta["name"].as<const char*>());
-    Serial.print("Tempo de Luminosidade: ");
-    Serial.println(planta["tempo_luminosidade"].as<int>());
-    Serial.println("--------------------");
-  }
-}
-
-void fazerRequisicao() {
-  String response = "";
-
-  if (WiFi.status() == WL_CONNECTED) {
-    WiFiClient client;
-    HTTPClient http;
-
-    http.begin(client, serverAddress);
-    int httpResponseCode = http.GET();
-
-    if (httpResponseCode > 0) {
-      response = http.getString();
-    } else {
-      Serial.print("Erro na requisição: ");
-      Serial.println(httpResponseCode);
-    }
-
-    http.end();
-  }
-
-  if (response != "") {
-    // Processar JSON recebido
-    StaticJsonDocument<1024> json;
-    DeserializationError error = deserializeJson(json, response);
-
-    if (!error) {
-      plantas = json.as<JsonArray>();
-      printarPlantas(plantas);  // Chama a função para imprimir os dados
-    } else {
-      Serial.println("Erro ao processar JSON!");
-    }
-  }
-}
-
 // Função para buscar os parâmetros da planta no banco de dados
 void requisitarDadosPlantas() {
   if (WiFi.status() == WL_CONNECTED) {
@@ -191,14 +123,14 @@ void requisitarDadosPlantas() {
 
     if (httpResponseCode > 0) {
       String response = http.getString();
-      StaticJsonDocument<1024> json;
+      StaticJsonDocument<2048> json;
       DeserializationError error = deserializeJson(json, response);
 
       if (!error) {
-        JsonObject planta = json[0];  // Pegando a primeira planta da resposta
-        umidadeMin = planta["umidade_solo_min"];
-        umidadeMax = planta["umidade_solo_max"];
-        tempoLuminosidade = (int)planta["tempo_luminosidade"] * 3600 * 1000;
+        plantas = json.as<JsonArray>();
+        int totalPlantas = plantas.size();
+        Serial.print("Quantidade de plantas recebidas: ");
+        Serial.println(totalPlantas);
         Serial.println("Dados da planta atualizados!");
       } else {
         Serial.println("Erro ao processar JSON!");
@@ -211,25 +143,26 @@ void requisitarDadosPlantas() {
   }
 }
 
-// Função para monitorar a umidade do solo e controlar a bomba de água
 void monitorarUmidadeSolo() {
   pinUmidadeSolo = analogRead(A0);
-  umidade = 100 * ((978 - (float)pinUmidadeSolo) / 978);
+  umidade = 100.0 * ((978 - (float)pinUmidadeSolo) / 978);
 
-  if (umidade < umidadeMin) {
+  if (umidade < umidadeMin && !bombaLigada) {
     Serial.println("Bomba ligada!");
-    digitalWrite(BOMBA, LOW);  // Liga a bomba (relé ativo em LOW)
-  } else if (umidade > umidadeMax) {
+    digitalWrite(BOMBA, LOW);
+    bombaLigada = true;
+  } else if (umidade > umidadeMax && bombaLigada) {
     Serial.println("Bomba desligada!");
-    digitalWrite(BOMBA, HIGH);  // Desliga a bomba (relé desativado em HIGH)
+    digitalWrite(BOMBA, HIGH);
+    bombaLigada = false;
   }
 }
 
 void monitorarLampada() {
   unsigned long agora = millis();
-  bool lampadaLigada = false;
+
   // Verifica se já passou 24 horas desde a última ativação
-  if (!lampadaLigada && (agora - ultimaLigacaoLampada >= 24 * 3600 * 1000)) {
+  if (!lampadaLigada && (agora - ultimaLigacaoLampada >= 24UL * 3600 * 1000)) {
     Serial.println("Lâmpada ligada!");
     digitalWrite(LAMPADA, HIGH);
     ultimaLigacaoLampada = agora;

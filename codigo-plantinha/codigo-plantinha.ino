@@ -16,8 +16,8 @@
 JsonArray plantas;
 
 //--------Configurações iniciais do sensor de umidade do solo--------
-int pinUmidadeSolo;
-float umidade;
+int pinUmidadeSolo = 0;
+float umidade = 0;
 
 //--------Configurações iniciais do sensor de temperatura--------
 #define BMP280_I2C_ADDRESS 0x76  //Define o endereço I2C do BMP280. Esse endereço (0x76) é o que o ESP8266 usará para "falar" com o sensor.
@@ -31,17 +31,27 @@ BH1750 lightMeter;
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 //-------- Variaveis para controle de tempo------------------------
-float umidadeMin = 30.0;                   // Umidade mínima ideal do solo (%)
-float umidadeMax = 60.0;                   // Umidade máxima ideal do solo (%)
+float umidadeMin = 30.0;  // Umidade mínima ideal do solo (%)
+float umidadeMax = 60.0;  // Umidade máxima ideal do solo (%)
 int horasNecessarias = 1;
 int tempoLuminosidade = horasNecessarias * 3600 * 1000;  // Exemplo: 1 horas em milissegundos
 unsigned long ultimaLigacaoLampada = 0;
-bool lampadaLigada = false; 
+bool lampadaLigada = false;
 bool bombaLigada = false;
 
-//------------ Definição de pinos bomba e lampada
+//------------ Definição de pinos joystick, bomba e lampada
 #define BOMBA D5
 #define LAMPADA D6
+#define VRX_PIN D3
+#define SW_PIN D4
+
+//------------ Auxiliar para timer de uma hora
+unsigned long ultimaExecucao = 0;
+
+//------------ Variáveis globais para controle da navegação
+int indicePlantaAtual = 0;  // Índice da planta atualmente selecionada
+bool vrxFoiParaEsquerda = false;
+bool dadosPlantasProntos = false;
 
 //--------Setup--------
 
@@ -65,14 +75,18 @@ void setup() {
   lcd.begin(20, 4);    // Inicializa o LCD
   lcd.backlight();     // Liga o backlight
   lcd.setCursor(0, 0);
-  lcd.print("Iniciando!");
+  lcd.print("Iniciado!");
 
   // Inicializa o sensor de luminosidade
   lightMeter.begin();
 
-  //Configura o D5 para controle da bomba
-  //pinMode(BOMBA, OUTPUT);
-  //digitalWrite(BOMBA, HIGH); // Garante que a bomba comece desligada
+  // Configura o D5 para controle da bomba
+  pinMode(BOMBA, OUTPUT);
+  digitalWrite(BOMBA, LOW);  // Garante que a bomba comece desligada
+
+  // Configuração do joystick
+  pinMode(VRX_PIN, INPUT);
+  pinMode(SW_PIN, INPUT_PULLUP);  // Botão é ativo em LOW
 
   // Conectar ao WiFi
   conectarWiFi();
@@ -86,7 +100,7 @@ void setup() {
 void loop() {
 
   // Verifica a umidade do solo
-  //monitorarUmidadeSolo();
+  monitorarUmidadeSolo();
 
   // Verifica o tempo de luminosidade que a planta precisa
   //monitorarLampada();
@@ -98,6 +112,18 @@ void loop() {
   Blynk.virtualWrite(V0, lightMeter.readLightLevel());
   Blynk.virtualWrite(V1, bmp280.readTemperature());
   Blynk.virtualWrite(V2, umidade);
+
+  if (dadosPlantasProntos) {
+    navegarPlantasComJoystick();
+  }
+
+  // Buscar informações no servidor a cada hora
+  if (millis() - ultimaExecucao >= 3600000) {
+    ultimaExecucao = millis();
+
+    // Fazer requisição ao servidor
+    requisitarDadosPlantas();
+  }
 }
 //--------- Funções
 
@@ -123,15 +149,16 @@ void requisitarDadosPlantas() {
 
     if (httpResponseCode > 0) {
       String response = http.getString();
-      StaticJsonDocument<2048> json;
-      DeserializationError error = deserializeJson(json, response);
+      static DynamicJsonDocument jsonDoc(4096);
+      DeserializationError error = deserializeJson(jsonDoc, response);
 
       if (!error) {
-        plantas = json.as<JsonArray>();
+        plantas = jsonDoc.as<JsonArray>();
         int totalPlantas = plantas.size();
         Serial.print("Quantidade de plantas recebidas: ");
         Serial.println(totalPlantas);
         Serial.println("Dados da planta atualizados!");
+        dadosPlantasProntos = true;
       } else {
         Serial.println("Erro ao processar JSON!");
       }
@@ -149,11 +176,11 @@ void monitorarUmidadeSolo() {
 
   if (umidade < umidadeMin && !bombaLigada) {
     Serial.println("Bomba ligada!");
-    digitalWrite(BOMBA, LOW);
-    bombaLigada = true;
-  } else if (umidade > umidadeMax && bombaLigada) {
-    Serial.println("Bomba desligada!");
     digitalWrite(BOMBA, HIGH);
+    bombaLigada = true;
+  } else if (umidade > umidadeMin && bombaLigada) {
+    Serial.println("Bomba desligada!");
+    digitalWrite(BOMBA, LOW);
     bombaLigada = false;
   }
 }
@@ -176,3 +203,96 @@ void monitorarLampada() {
     lampadaLigada = false;
   }
 }
+
+
+void mostrarComScroll(const char* label, const char* texto, int linha = 0, int delayScroll = 300) {
+  int len = strlen(texto);
+  int maxVisivel = 20;
+
+  lcd.setCursor(0, linha);
+  lcd.print(label);
+
+  if (len <= maxVisivel) {
+    lcd.setCursor(0, linha + 1);
+    lcd.print(texto);
+  } else {
+    for (int i = 0; i <= len - maxVisivel; i++) {
+      lcd.setCursor(0, linha + 1);
+      for (int j = 0; j < maxVisivel; j++) {
+        lcd.print(texto[i + j]);
+      }
+      delay(delayScroll);
+    }
+
+    // Volta ao início
+    delay(500);
+    lcd.setCursor(0, linha + 1);
+    for (int j = 0; j < maxVisivel; j++) {
+      lcd.print(texto[j]);
+    }
+  }
+}
+
+
+void navegarPlantasComJoystick() {
+  int vrxValor = digitalRead(VRX_PIN);
+  int swValor = digitalRead(SW_PIN);
+
+  // Avança para próxima planta se o joystick foi para esquerda
+  if (vrxValor == LOW && !vrxFoiParaEsquerda && plantas.size() > 0) {
+    indicePlantaAtual = (indicePlantaAtual + 1) % plantas.size();
+    JsonObject planta = plantas[indicePlantaAtual];
+
+    // Mostra nome da planta no LCD
+    const char* nome = plantas[indicePlantaAtual]["name"].as<const char*>();
+    lcd.clear();
+    mostrarComScroll("Selecionando:", nome);
+
+    vrxFoiParaEsquerda = true;
+    delay(300);  // debounce
+  }
+
+  // Reseta flag quando volta pro centro
+  if (vrxValor == HIGH && vrxFoiParaEsquerda) {
+    vrxFoiParaEsquerda = false;
+  }
+
+  // Seleciona planta atual ao pressionar o botão
+  if (swValor == LOW && plantas.size() > 0) {
+    lcd.clear();
+
+    const char* nome = plantas[indicePlantaAtual]["name"].as<const char*>();
+    float uMin = plantas[indicePlantaAtual]["umidade_solo_min"].as<float>();
+    float uMax = plantas[indicePlantaAtual]["umidade_solo_max"].as<float>();
+    int horas = plantas[indicePlantaAtual]["tempo_luminosidade"].as<int>();
+
+    // Mostrar parâmetros da planta
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Planta:");
+    lcd.print(nome);
+    lcd.setCursor(0, 2);
+    lcd.print("Umin:");
+    lcd.print(uMin, 0);
+    lcd.print("% Umax:");
+    lcd.print(uMax, 0);
+    lcd.print("%");
+
+    lcd.setCursor(0, 3);
+    lcd.print("Luz/dia: ");
+    lcd.print(horas);
+    lcd.print("h");
+
+    // Atualiza os valores do sistema com os da planta
+    umidadeMin = uMin;
+    umidadeMax = uMax;
+    horasNecessarias = horas;
+    tempoLuminosidade = horasNecessarias * 3600 * 1000;
+
+    Serial.print("Planta selecionada: ");
+    Serial.println(nome);
+
+    delay(1000);  // Tempo para usuário ler
+  }
+}
+

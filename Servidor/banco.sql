@@ -10,7 +10,9 @@ CREATE TABLE planta (
     umidade_solo_max DECIMAL(5,2) NOT NULL COMMENT 'Umidade máxima ideal do solo (%)'
 );
 
-INSERT INTO plantas (name, tempo_luminosidade, temperatura_min, temperatura_max, umidade_solo_min, umidade_solo_max) VALUES
+INSERT INTO planta 
+(name, tempo_luminosidade, temperatura_min, temperatura_max, umidade_solo_min, umidade_solo_max) 
+ VALUES
 ('Erva-mate', 12, 20.00, 35.00, 60.00, 80.00),
 ('Tomate', 8, 18.00, 30.00, 60.00, 80.00),
 ('Alface', 10, 10.00, 25.00, 60.00, 90.00),
